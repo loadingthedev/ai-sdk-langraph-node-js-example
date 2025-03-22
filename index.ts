@@ -335,15 +335,6 @@ app.post("/api/agent-chat", async function (req: Request, res: Response) {
 
     for await (const chunk of stream) {
       for (const [node, values] of Object.entries(chunk)) {
-        console.dir(
-          {
-            node,
-            values,
-          },
-          {
-            depth: 3,
-          }
-        );
         if (
           node === "data" &&
           typeof values === "object" &&
