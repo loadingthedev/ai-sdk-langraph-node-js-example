@@ -52,10 +52,66 @@
       button:hover {
         background-color: #0b7dda;
       }
+      .toggle-container {
+        display: flex;
+        align-items: center;
+        margin-bottom: 15px;
+      }
+      .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 60px;
+        height: 34px;
+        margin: 0 10px;
+      }
+      .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: 0.4s;
+        border-radius: 34px;
+      }
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 26px;
+        width: 26px;
+        left: 4px;
+        bottom: 4px;
+        background-color: white;
+        transition: 0.4s;
+        border-radius: 50%;
+      }
+      input:checked + .slider {
+        background-color: #2196f3;
+      }
+      input:checked + .slider:before {
+        transform: translateX(26px);
+      }
+      .mode-label {
+        font-weight: bold;
+      }
     </style>
   </head>
   <body>
     <h1>AI Chat Client</h1>
+    <div class="toggle-container">
+      <span class="mode-label">Normal Chat</span>
+      <label class="toggle-switch">
+        <input type="checkbox" id="agentToggle" />
+        <span class="slider"></span>
+      </label>
+      <span class="mode-label">Agent Chat</span>
+    </div>
     <div class="chat-container" id="chatContainer"></div>
     <div class="input-container">
       <input type="text" id="messageInput" placeholder="Type your message..." />
@@ -66,6 +122,7 @@
       const chatContainer = document.getElementById("chatContainer");
       const messageInput = document.getElementById("messageInput");
       const sendButton = document.getElementById("sendButton");
+      const agentToggle = document.getElementById("agentToggle");
 
       // A simple session ID - in a real app, you might use a UUID
       const sessionId = "browser-session-" + Date.now();
@@ -97,8 +154,13 @@
         chatContainer.appendChild(responseDiv);
 
         try {
+          // Determine which endpoint to use based on the toggle state
+          const endpoint = agentToggle.checked
+            ? "http://localhost:3000/api/agent-chat"
+            : "http://localhost:3000/api/chat";
+
           // Make the API request
-          const response = await fetch("http://localhost:3000/api/chat", {
+          const response = await fetch(endpoint, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -106,31 +168,63 @@
             body: JSON.stringify({ message, sessionId }),
           });
 
-          // Set up event source for streaming
-          const reader = response.body.getReader();
-          const decoder = new TextDecoder();
+          // Handle based on the endpoint (different streaming formats)
+          if (agentToggle.checked) {
+            // Agent chat uses Server-Sent Events (SSE) format
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
 
-          // Process the stream
-          while (true) {
-            const { value, done } = await reader.read();
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
 
-            if (done) break;
+              const chunk = decoder.decode(value, { stream: true });
 
-            // Decode the received chunk
-            const chunk = decoder.decode(value, { stream: true });
+              // Process SSE format (data: {"text":"content"})
+              const lines = chunk.split("\n\n");
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  if (line.includes("[DONE]")) continue;
 
-            // Process the AI SDK's Data Stream Protocol format
-            // Format: [stream-id]:"[content]"\n
-            const lines = chunk.split("\n");
-            for (const line of lines) {
-              if (line.startsWith('0:"')) {
-                // Extract text content from the format 0:"content"
-                const content = line.slice(3, -1);
-                responseDiv.textContent += content;
-                chatContainer.scrollTop = chatContainer.scrollHeight;
-              } else if (line.startsWith("e:") || line.startsWith("d:")) {
-                // End of stream or data event - we could parse the JSON if needed
-                console.log("Stream event:", line);
+                  try {
+                    const jsonStr = line.slice(6); // Remove 'data: ' prefix
+                    const data = JSON.parse(jsonStr);
+                    if (data.text) {
+                      responseDiv.textContent += data.text;
+                      chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
+                  } catch (e) {
+                    console.warn("Error parsing SSE JSON:", e);
+                  }
+                }
+              }
+            }
+          } else {
+            // Regular chat uses AI SDK's Data Stream Protocol format
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            // Process the stream
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+
+              // Decode the received chunk
+              const chunk = decoder.decode(value, { stream: true });
+
+              // Process the AI SDK's Data Stream Protocol format
+              // Format: [stream-id]:"[content]"\n
+              const lines = chunk.split("\n");
+              for (const line of lines) {
+                if (line.startsWith('0:"')) {
+                  // Extract text content from the format 0:"content"
+                  const content = line.slice(3, -1);
+                  responseDiv.textContent += content;
+                  chatContainer.scrollTop = chatContainer.scrollHeight;
+                } else if (line.startsWith("e:") || line.startsWith("d:")) {
+                  // End of stream or data event - we could parse the JSON if needed
+                  console.log("Stream event:", line);
+                }
               }
             }
           }
@@ -145,6 +239,13 @@
       sendButton.addEventListener("click", sendMessage);
       messageInput.addEventListener("keypress", (e) => {
         if (e.key === "Enter") sendMessage();
+      });
+
+      // When toggle changes, clear the chat to avoid confusion
+      agentToggle.addEventListener("change", () => {
+        const mode = agentToggle.checked ? "Agent Chat" : "Normal Chat";
+        chatContainer.innerHTML = "";
+        addMessage(`Switched to ${mode} mode`, "assistant");
       });
     </script>
   </body>
