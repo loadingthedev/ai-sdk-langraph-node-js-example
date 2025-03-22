@@ -6,6 +6,7 @@ import cors from "cors";
 import type { Request, Response } from "express";
 import { createAgentGraph } from "./graph";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import fs from "fs";
 
 dotenv.config();
 
@@ -284,6 +285,7 @@ app.post("/api/agent-chat", async function (req: Request, res: Response) {
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
     console.log(`[AGENT] Headers set for streaming`);
+    res.flushHeaders();
 
     // Get message history if it exists
     const history = sessions[sessionId] || [];
@@ -312,89 +314,51 @@ app.post("/api/agent-chat", async function (req: Request, res: Response) {
 
     // Execute the graph with streaming and include thread_id in configurable
     console.log(`[AGENT] Starting graph stream execution`);
-    const stream = await graph.stream(
+    const stream = graph.streamEvents(
       {
         messages: langchainMessages,
       },
       {
-        streamMode: "values",
         configurable: {
           thread_id: sessionId,
         },
+        version: "v2" as const,
       }
     );
 
-    console.log(`[AGENT] Stream object created, ready to process chunks`);
-
     let assistantResponse = "";
-    let chunkCount = 0;
+    const streamResponses: Array<{
+      chunk?: any;
+      values?: any;
+      timestamp: string;
+    }> = [];
 
-    // Stream response chunks to the client
     for await (const chunk of stream) {
-      chunkCount++;
-      console.log(
-        `[AGENT] Processing chunk #${chunkCount}:`,
-        JSON.stringify(chunk, null, 2)
-      );
-
-      // Send any actions being taken (tool calls)
-      if (chunk.actions) {
-        for (const action of chunk.actions) {
-          const toolData = {
-            type: "tool_call",
-            tool: action.tool,
-            input: action.tool_input,
-          };
-          res.write(`data: ${JSON.stringify(toolData)}\n\n`);
-        }
-      }
-
-      // Send any observations from tools
-      if (chunk.steps) {
-        for (const step of chunk.steps) {
-          const observationData = {
-            type: "tool_result",
-            observation: step.observation,
-          };
-          res.write(`data: ${JSON.stringify(observationData)}\n\n`);
-        }
-      }
-
-      // Stream LLM responses
-      if (chunk.messages && chunk.messages.length > 0) {
-        const lastMessage = chunk.messages[chunk.messages.length - 1];
-        if (lastMessage.content) {
-          const content =
-            typeof lastMessage.content === "string"
-              ? lastMessage.content
-              : JSON.stringify(lastMessage.content);
-
+      for (const [node, values] of Object.entries(chunk)) {
+        console.dir(
+          {
+            node,
+            values,
+          },
+          {
+            depth: 3,
+          }
+        );
+        if (
+          node === "data" &&
+          typeof values === "object" &&
+          values !== null &&
+          "chunk" in values
+        ) {
           const data = `data: ${JSON.stringify({
             type: "text",
-            text: content,
+            text: values.chunk.content,
+            node: node,
           })}\n\n`;
-
           res.write(data);
-          assistantResponse = content;
         }
       }
-
-      // Send the final output if available
-      if (chunk.output) {
-        const outputData = {
-          type: "final",
-          text: chunk.output,
-        };
-        res.write(`data: ${JSON.stringify(outputData)}\n\n`);
-        assistantResponse =
-          typeof chunk.output === "string"
-            ? chunk.output
-            : chunk.output.output || JSON.stringify(chunk.output);
-      }
     }
-
-    console.log(`[AGENT] Processed ${chunkCount} total chunks`);
-    console.log(`[AGENT] Final assistant response: ${assistantResponse}`);
 
     // Add assistant response to history
     sessions[sessionId].push({ role: "assistant", content: assistantResponse });
@@ -402,7 +366,6 @@ app.post("/api/agent-chat", async function (req: Request, res: Response) {
     // End the response
     res.write("data: [DONE]\n\n");
     res.end();
-    console.log(`[AGENT] Stream ended successfully`);
   } catch (error) {
     console.error("[AGENT] Error in agent chat stream:", error);
     res.status(500).json({ error: "An error occurred with the agent" });
