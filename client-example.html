@@ -136,30 +136,24 @@
         chatContainer.scrollTop = chatContainer.scrollHeight;
       }
 
-      // Function to send a message and handle the streaming response
       async function sendMessage() {
         const message = messageInput.value.trim();
         if (!message) return;
 
-        // Display user message
         addMessage(message, "user");
 
-        // Clear input field
         messageInput.value = "";
 
-        // Create a div for the assistant's response that we'll update as chunks arrive
         const responseDiv = document.createElement("div");
         responseDiv.classList.add("message", "assistant");
         responseDiv.textContent = "";
         chatContainer.appendChild(responseDiv);
 
         try {
-          // Determine which endpoint to use based on the toggle state
           const endpoint = agentToggle.checked
             ? "http://localhost:3000/api/agent-chat"
             : "http://localhost:3000/api/chat";
 
-          // Make the API request
           const response = await fetch(endpoint, {
             method: "POST",
             headers: {
