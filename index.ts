@@ -17,7 +17,7 @@ app.use(express.json());
 // Store conversation history per session (in a real app, use a database)
 const sessions: Record<string, CoreMessage[]> = {};
 
-// Chat endpoint
+// // Chat endpoint
 app.post("/api/chat", async function (req: Request, res: Response) {
   const { message, sessionId = "default" } = req.body;
 
@@ -33,35 +33,57 @@ app.post("/api/chat", async function (req: Request, res: Response) {
   // Add user message to history
   sessions[sessionId].push({ role: "user", content: message });
 
-  // Set headers for streaming
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-
   try {
     const result = streamText({
       model: openai("gpt-4o"),
       messages: sessions[sessionId],
     });
 
-    let fullResponse = "";
+    // Create a response using AI SDK's streaming method
+    const streamResponse = result.toDataStreamResponse();
 
-    // Stream each chunk to the client
-    for await (const delta of result.textStream) {
-      fullResponse += delta;
-      res.write(`data: ${JSON.stringify({ text: delta })}\n\n`);
+    // Set response headers from the stream response
+    for (const [key, value] of streamResponse.headers.entries()) {
+      res.setHeader(key, value);
     }
 
-    // Add assistant response to history
-    sessions[sessionId].push({ role: "assistant", content: fullResponse });
+    // Pipe the stream to Express response
+    const readable = streamResponse.body;
+    if (readable) {
+      const reader = readable.getReader();
 
-    // End the response
-    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-    res.end();
+      // Track the complete response to save in session
+      let fullResponse = "";
+
+      // Process the stream
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Send chunk to client
+        res.write(value);
+
+        // Decode and track for session history
+        const text = new TextDecoder().decode(value);
+        const matches = text.match(/0:"([^"]*)"/g);
+        if (matches) {
+          matches.forEach((match) => {
+            const content = match.slice(3, -1);
+            fullResponse += content;
+          });
+        }
+      }
+
+      // Add assistant response to history
+      sessions[sessionId].push({ role: "assistant", content: fullResponse });
+
+      res.end();
+    } else {
+      throw new Error("Stream response body is null");
+    }
   } catch (error) {
     console.error("Error in chat stream:", error);
-    res.write(`data: ${JSON.stringify({ error: "An error occurred" })}\n\n`);
-    res.end();
+    res.status(500).json({ error: "An error occurred" });
   }
 });
 
