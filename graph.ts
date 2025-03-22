@@ -1,12 +1,16 @@
-import { Annotation, MemorySaver } from "@langchain/langgraph";
-import { BaseMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, BaseMessage, HumanMessage } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
-import { z } from "zod";
+import {
+  Annotation,
+  END,
+  MemorySaver,
+  START,
+  StateGraph,
+} from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { ChatOpenAI } from "@langchain/openai";
-import { END, START, StateGraph } from "@langchain/langgraph";
-import { AIMessage } from "@langchain/core/messages";
 import dotenv from "dotenv";
+import { z } from "zod";
 dotenv.config();
 
 // Add color logging utility
@@ -78,7 +82,6 @@ const callModel = async (state: typeof StateAnnotation.State) => {
   return { messages: [responseMessage] };
 };
 
-// Wrap the tool node with logging
 const wrappedToolNode = async (state: typeof StateAnnotation.State) => {
   logNode("tools", "Executing tools...");
   const result = await toolNode.invoke(state);
@@ -143,5 +146,3 @@ async function main() {
 
   console.log("Stream responses saved to langgraph-stream-responses.json");
 }
-
-// main();
